@@ -1,3 +1,15 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#020816">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Saphir – Vollbild-Flipper im Browser mit Multiball, Jackpot und Dot-Matrix-Anzeige.">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M9 4h14l7 8-14 17L2 12z' fill='%232f6dff' stroke='%2346e3ff' stroke-width='2'/%3E%3C/svg%3E">
 <title>Saphir Flipper</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,6 +23,8 @@
   color-scheme:dark;
 }
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;font-family:var(--ui)}
+body.playing #game{cursor:none}
+html,body{overscroll-behavior:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 #game{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;user-select:none;-webkit-user-select:none}
 #safe{position:fixed;top:0;left:0;padding-top:env(safe-area-inset-top,0px);visibility:hidden;pointer-events:none}
 .tools{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;display:flex;flex-direction:column;gap:8px;z-index:5}
@@ -41,6 +55,9 @@ kbd{font-family:var(--ui);font-size:12px;padding:1px 6px;border-radius:5px;borde
 @media (max-width:420px){.card{padding:22px 18px}.keys{font-size:13px}}
 </style>
 
+</head>
+<body>
+<noscript><p style="padding:24px">Saphir braucht JavaScript. Bitte im Browser aktivieren.</p></noscript>
 <canvas id="game" aria-label="Flippertisch Saphir"></canvas>
 <div id="safe"></div>
 
@@ -59,6 +76,7 @@ kbd{font-family:var(--ui);font-size:12px;padding:1px 6px;border-radius:5px;borde
       <dt>Flipper</dt><dd><kbd>←</kbd> <kbd>A</kbd> <kbd>Shift</kbd> links · <kbd>→</kbd> <kbd>L</kbd> <kbd>Shift</kbd> rechts</dd>
       <dt>Abschuss</dt><dd><kbd>Leertaste</kbd> oder <kbd>↓</kbd> halten, loslassen</dd>
       <dt>Rütteln</dt><dd><kbd>↑</kbd> oder <kbd>N</kbd> · zu oft = TILT</dd>
+      <dt>Gamepad</dt><dd>Schultertasten = Flipper · A = Abschuss · Y = Rütteln</dd>
       <dt>Touch</dt><dd>Linke / rechte Hälfte tippen · Abschuss: unten rechts halten</dd>
     </dl>
     <p class="rules">Fallziele <b>S-A-P</b> und <b>H-I-R</b> schalten das Lock frei. Drei Kugeln in der Saphir-Kammer starten den <b>Multiball</b>, dann zahlt die Kammer den <b>Jackpot</b>. Alle drei oberen Bahnen erhöhen den Bonus-Multiplikator, die Flipper verschieben die Lichter. Skill-Shot: beim Abschuss die blinkende Bahn treffen.</p>
@@ -163,6 +181,7 @@ function burst(x, y, n, col) {
 
 /* ===================== Audio (WebAudio-Synthese) ===================== */
 let AC = null, master = null, muted = false, noiseBuf = null;
+try { muted = localStorage.getItem('saphir-muted') === '1'; } catch (e) {}
 function audio() {
   if (AC) { if (AC.state === 'suspended') AC.resume().catch(() => {}); return; }
   try {
@@ -380,12 +399,11 @@ function startGame() {
   if (game.running) return;
   audio(); balls = []; Object.assign(game, { running: true, score: 0, ball: 1, locks: 0, lockLit: false, jackpot: 50000, letters: new Set(), overT: 0, flash: 1 });
   drops.forEach(d => d.down = false); startBall(); play('start'); hideOverlay(); dmdDirty = true;
-  if (!document.fullscreenElement && document.documentElement.requestFullscreen && matchMedia('(pointer:fine)').matches) {
-    document.documentElement.requestFullscreen().catch(() => {});
-  }
+  if (!fsElement() && matchMedia('(pointer:fine)').matches) enterFs();
+  document.body.classList.add('playing'); wakeLock();
 }
 function gameOver() {
-  game.running = false; game.state = 'idle'; game.last = game.score; game.overT = 3;
+  game.running = false; game.state = 'idle'; game.last = game.score; game.overT = 3; document.body.classList.remove('playing');
   let rec = false; if (game.score > high) { high = game.score; saveHigh(); rec = true; }
   msg('GAME OVER', rec ? 'NEUER REKORD' : 'PUNKTE ' + fmt(game.score), 3, false);
   setTimeout(() => showOverlay(rec), 2200);
@@ -461,6 +479,7 @@ addEventListener('keydown', e => {
   if (!overlay.hidden && (c === 'Enter' || c === 'NumpadEnter' || c === 'Space')) { startGame(); return; }
   if (c === 'KeyP' || c === 'Escape') { togglePause(); return; }
   if (c === 'KeyM') { toggleSound(); return; }
+  if (c === 'KeyF') { showFps = !showFps; return; }
   if (paused) return;
   if (KL.includes(c)) setFlip(0, true);
   else if (KR.includes(c)) setFlip(1, true);
@@ -485,6 +504,8 @@ cvs.addEventListener('pointerdown', e => {
 const ptrEnd = e => { const r = ptrs.get(e.pointerId); if (!r) return; ptrs.delete(e.pointerId); if (![...ptrs.values()].includes(r)) press(r, false); };
 cvs.addEventListener('pointerup', ptrEnd); cvs.addEventListener('pointercancel', ptrEnd);
 cvs.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', e => e.preventDefault());
 
 const overlay = document.getElementById('overlay');
 function hideOverlay() { overlay.hidden = true; }
@@ -497,14 +518,28 @@ function showOverlay(rec) {
 }
 document.getElementById('hs').textContent = high ? 'Rekord ' + fmt(high) : 'Noch kein Rekord';
 document.getElementById('bStart').addEventListener('click', startGame);
+document.getElementById('bSound').setAttribute('aria-pressed', String(muted));
 function togglePause() { if (!game.running) return; paused = !paused; dmdDirty = true; for (const f of flippers) f.on = false; plunger.hold = false; }
-function toggleSound() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.32; document.getElementById('bSound').setAttribute('aria-pressed', String(muted)); }
+function toggleSound() { muted = !muted; try { localStorage.setItem('saphir-muted', muted ? '1' : '0'); } catch (e) {} if (master) master.gain.value = muted ? 0 : 0.32; document.getElementById('bSound').setAttribute('aria-pressed', String(muted)); }
 document.getElementById('bPause').addEventListener('click', togglePause);
 document.getElementById('bSound').addEventListener('click', () => { audio(); toggleSound(); });
-document.getElementById('bFull').addEventListener('click', () => {
-  try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {}
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+function enterFs() {
+  const el = document.documentElement;
+  try { const r = (el.requestFullscreen || el.webkitRequestFullscreen).call(el, { navigationUI: 'hide' }); if (r && r.catch) r.catch(() => {}); } catch (e) {}
+}
+function exitFs() { try { const r = (document.exitFullscreen || document.webkitExitFullscreen).call(document); if (r && r.catch) r.catch(() => {}); } catch (e) {} }
+document.getElementById('bFull').addEventListener('click', () => { fsElement() ? exitFs() : enterFs(); });
+document.addEventListener('fullscreenchange', () => setTimeout(resize, 50));
+document.addEventListener('webkitfullscreenchange', () => setTimeout(resize, 50));
+let lock = null;
+async function wakeLock() { try { if ('wakeLock' in navigator && !lock) { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) { lock = null; } }
+function releaseInputs() { for (const f of flippers) f.on = false; plunger.hold = false; ptrs.clear(); }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { releaseInputs(); if (game.running && !paused) togglePause(); }
+  else if (game.running) wakeLock();
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden && game.running && !paused) togglePause(); });
+addEventListener('blur', () => { releaseInputs(); if (game.running && !paused) togglePause(); });
 
 /* ===================== Grafik: Sprites & Layout ===================== */
 function glowSprite(rgb) {
@@ -517,13 +552,14 @@ const RGB = { cyan: '70,225,255', blue: '50,115,255', ice: '215,242,255', violet
 const GLOW = {}; for (const k in RGB) GLOW[k] = glowSprite(RGB[k]);
 function glow(sp, x, y, R, a) { if (a <= 0.01) return; ctx.globalAlpha = Math.min(1, a); ctx.drawImage(sp, x - R, y - R, 2 * R, 2 * R); }
 
+let dprCap = 2, showFps = false, fps = 60, slowT = 0;
 let VW = 0, VH = 0, dpr = 1, scale = 1, ox = 0, oy = 0, layout = 'stack', safeTop = 0;
 let dmdX = 0, dmdY = 0, dmdW = 0, dmdH = 0;
 const pfCache = document.createElement('canvas'), bgCache = document.createElement('canvas'), dmdCv = document.createElement('canvas');
 const dmdCtx = dmdCv.getContext('2d');
 
 function resize() {
-  VW = innerWidth; VH = innerHeight; dpr = Math.min(window.devicePixelRatio || 1, 2);
+  VW = innerWidth; VH = innerHeight; dpr = Math.min(window.devicePixelRatio || 1, dprCap);
   safeTop = document.getElementById('safe').offsetHeight || 0;
   cvs.width = Math.round(VW * dpr); cvs.height = Math.round(VH * dpr);
   const sTall = (VH - 16) / H, side = VW - W * sTall;
@@ -805,7 +841,7 @@ function drawPanels() {
   let ry = Math.max(40, VH * 0.1);
   ctx.font = `400 ${Math.min(44, rw / 6)}px Michroma, sans-serif`; ctx.fillStyle = '#bfeeff'; ctx.fillText('SAPHIR', rx, ry); ry += 28;
   ctx.font = '600 12px "Chakra Petch", sans-serif'; ctx.fillStyle = '#7fa3cc'; ctx.fillText('FLIPPER · 3 KUGELN · MULTIBALL', rx, ry); ry += 40;
-  const lines = [['FLIPPER', '← / A   ·   → / L'], ['ABSCHUSS', 'LEERTASTE HALTEN'], ['RÜTTELN', '↑ / N'], ['PAUSE · TON', 'P · M']];
+  const lines = [['FLIPPER', '← / A   ·   → / L'], ['ABSCHUSS', 'LEERTASTE HALTEN'], ['RÜTTELN', '↑ / N'], ['PAUSE · TON', 'P · M'], ['FPS · GAMEPAD', 'F · SCHULTERTASTEN']];
   for (const [a, b] of lines) {
     ctx.font = '600 12px "Chakra Petch", sans-serif'; ctx.fillStyle = '#46e3ff'; ctx.fillText(a, rx, ry);
     ctx.font = '400 16px "Chakra Petch", sans-serif'; ctx.fillStyle = '#dff3ff'; ctx.fillText(b, rx, ry + 20); ry += 50;
@@ -899,12 +935,36 @@ function render() {
   drawPanels();
   ctx.drawImage(dmdCv, dmdX, dmdY, dmdW, dmdH);
 }
+/* Gamepad: Schultertasten/Trigger = Flipper, A/B = Abschuss, Y = Rütteln, Start = Spiel/Pause */
+const padPrev = {};
+function pollPads() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const gp of pads) {
+    if (!gp) continue;
+    const bt = i => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.4));
+    const st = { L: bt(4) || bt(6) || bt(14), R: bt(5) || bt(7) || bt(15), P: bt(0) || bt(1) || bt(13), N: bt(3) || bt(12), S: bt(9) };
+    const pv = padPrev[gp.index] || {};
+    if (st.S && !pv.S) { audio(); if (!overlay.hidden) startGame(); else togglePause(); }
+    if (!paused && overlay.hidden) {
+      if (st.L !== !!pv.L) setFlip(0, st.L);
+      if (st.R !== !!pv.R) setFlip(1, st.R);
+      if (st.P !== !!pv.P) st.P ? plungerDown() : plungerUp();
+      if (st.N && !pv.N) nudge();
+    } else if (st.P && !pv.P && !overlay.hidden) { audio(); startGame(); }
+    padPrev[gp.index] = st;
+  }
+}
 let last = performance.now(), acc = 0;
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
+  fps += ((raw > 0 ? 1 / raw : 60) - fps) * 0.05;
+  if (dprCap > 1 && fps < 40 && !paused && !document.hidden) { slowT += raw; if (slowT > 3) { dprCap = 1; slowT = 0; resize(); } } else slowT = 0;
+  pollPads();
   if (!paused) { acc += dt; let n = 0; while (acc >= STEP && n < 60) { physics(STEP); acc -= STEP; n++; } if (n >= 60) acc = 0; update(dt); }
   else { T += dt; if (dmdDirty) { dmdDirty = false; dmdCompose(); dmdRender(); } }
-  render(); requestAnimationFrame(frame);
+  render();
+  if (showFps) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.font = '600 12px "Chakra Petch", monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = '#46e3ff'; ctx.fillText(Math.round(fps) + ' FPS · ' + dpr + 'x', 8, VH - 20); }
+  requestAnimationFrame(frame);
 }
 addEventListener('resize', resize);
 resize();
@@ -912,3 +972,5 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { bu
 requestAnimationFrame(frame);
 })();
 </script>
+</body>
+</html>
